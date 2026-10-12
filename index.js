@@ -64,7 +64,11 @@ const dateChanceSetting = () => { const n = Number(lsGet(LS.dateChance, '6')); r
 const invChanceSetting = () => { const n = Number(lsGet(LS.invChance, String(INVITE_DEFAULT))); return isNaN(n) ? INVITE_DEFAULT : Math.max(0, Math.min(INVITE_BASE, n)); };
 const invExtrasSetting = () => lsGet(LS.invExtras, 'true') !== 'false';
 /** Настройки приглашений → в модуль приглашений (броски, список кандидатов, нужны ли сборища) */
-function syncInviteCfg() { inviteCfg.base = invChanceSetting(); inviteCfg.extras = invExtrasSetting(); }
+function syncInviteCfg() {
+    inviteCfg.base = invChanceSetting();
+    inviteCfg.extras = invExtrasSetting();
+    inviteCfg.isHero = (n) => !!heroOf(n);     // сами герои никого не «зовут» и сами себе не именинники
+}
 syncInviteCfg();
 
 // ─── Эпоха — своя у каждого чата (хранится в состоянии чата); вера — определяется сама по началу чата ───
@@ -383,6 +387,19 @@ function restoreSnapshot(snap) {
     state.holidays = (state.holidays || []).filter(h => !isBanned(state, h.name));
     // и решённые поводы тоже: отклонённые и уже принятые
     state.offers = (state.offers || []).filter(o => !offerKnown(o));
+    // просьба позвать из старого снимка — только если она и сейчас имеет смысл (иначе удаление сообщения или свайп
+    // воскрешали уже отклонённое приглашение, приглашение от самого героя и т. п.)
+    if (staleInvRoll()) {
+        console.info(`[Hearthtide] из снимка не берём просьбу позвать на «${state.invRoll.name}» — она уже не к месту`);
+        state.invRoll = null;
+    }
+}
+/** Просьба позвать устарела: шанс 0, по приглашению уже решили, зовёт сам герой, или такого приглашения больше нет */
+function staleInvRoll() {
+    const r = state?.invRoll;
+    if (!r) return false;
+    return !inviteCfg.base || !!state.bdDecisions?.[r.key] || !!(r.host && heroOf(r.host))
+        || !inviteCandidates(state, true).some(c => c.key === r.key);
 }
 
 // «Подобрать заново» — тоже решение игрока: применяем и к сохранённым снимкам,
@@ -2803,11 +2820,12 @@ function scheduleRenderAll() {
     renderTimer = setTimeout(renderAll, 60);
 }
 function renderAll() {
-    if (!isEnabled()) { document.querySelectorAll('.ht-ib, .ht-cards').forEach(b => b.remove()); ui.nodes.clear(); return; }
+    if (!isEnabled()) { document.querySelectorAll('.ht-ib, .ht-cards').forEach(b => b.remove()); ui.nodes.clear(); addRereadButtons(); return; }
     if (!state && chat.length) loadState();
     document.querySelectorAll('#chat .mes[mesid]').forEach(el => renderBlock(Number(el.getAttribute('mesid'))));
     updateDateWhy();
     syncInviteList();
+    addRereadButtons();
 }
 
 // ─── Где кончается текст ответа ───
@@ -4530,14 +4548,40 @@ function onMessageSwiped(id) {
     }, 150);
 }
 
+// Правка сообщения — без запросов к помощнику: пересобираем инфоблок из того, что он уже прислал к этому свайпу.
+// Перечитать заново — кнопкой ↻ на панели сообщения (rereadMessage)
 function onMessageEdited(id) {
     if (!apiOn() || !state) return;
     const m = chat[id];
     if (m && !m.is_user && Number(id) === lastProcessedMsg()) {
         processReply(Number(id));
-        maybeSide(Number(id));
+        console.info(`[Hearthtide] правка сообщения ${id} — пересобрано без запроса к помощнику`);
     }
-    else scheduleRenderAll();
+    scheduleRenderAll();
+}
+
+// ─── Кнопка ↻ на панели сообщения: помощник перечитывает последний ответ (по желанию игрока, не сама) ───
+function rereadMessage(id) {
+    if (!isEnabled()) return;
+    if (!apiOn()) { window.toastr?.info?.(L().noProfile, 'Hearthtide'); return; }
+    if (generating) { window.toastr?.info?.(L().rereadBusy, 'Hearthtide'); return; }
+    if (!state) loadState();
+    const N = lastProcessedMsg();
+    if (id !== N || isOpening(N)) { window.toastr?.info?.(L().rereadOnlyLast, 'Hearthtide'); return; }
+    console.info(`[Hearthtide] перечитать сообщение ${N} — по кнопке`);
+    window.toastr?.info?.(L().rereadToast, 'Hearthtide');
+    maybeSide(N, true);
+}
+const REREAD_CLASS = 'ht-reread';
+const rereadHtml = () => `<div class="mes_button ${REREAD_CLASS} fa-solid fa-arrows-rotate" title="${esc(L().rereadTitle)}"></div>`;
+/** Кнопка — в шаблон сообщения (новые сообщения) и в уже нарисованные */
+function addRereadButtons() {
+    if (!isEnabled()) { document.querySelectorAll(`.${REREAD_CLASS}`).forEach(b => b.remove()); return; }
+    // в меню «…» сообщения (extraMesButtons); в старых версиях таверны его нет — тогда прямо на панель кнопок
+    const slot = (root) => root?.querySelector('.extraMesButtons') || root?.querySelector('.mes_buttons');
+    const put = (el) => { if (el && !el.querySelector(`.${REREAD_CLASS}`)) el.insertAdjacentHTML('afterbegin', rereadHtml()); };
+    put(slot(document.getElementById('message_template')));
+    document.querySelectorAll('#chat .mes').forEach(m => put(slot(m)));
 }
 
 function onMessageDeleted() {
@@ -4634,6 +4678,14 @@ function on(evt, fn) { if (evt) eventSource.on(evt, fn); }
 
 function init() {
     injectSettingsPanel();
+    addRereadButtons();
+    document.addEventListener('click', (e) => {
+        const b = e.target.closest?.(`.${REREAD_CLASS}`);
+        if (!b) return;
+        e.stopPropagation();
+        const id = Number(b.closest('.mes')?.getAttribute('mesid'));
+        if (!isNaN(id)) rereadMessage(id);
+    });
     loadState();
     injectPrompts();
     on(event_types.GENERATION_STARTED, onGenerationStarted);

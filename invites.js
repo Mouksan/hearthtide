@@ -18,7 +18,7 @@ export const INVITE_DEFAULT = 25;
  * base — шанс за ответ при самом близком дне и человеке (0 — никто никуда не зовёт);
  * extras — придумывает ли помощник сборища из жизни героев (без них зовут только на дни рождения)
  */
-export const inviteCfg = { base: INVITE_DEFAULT, extras: true };
+export const inviteCfg = { base: INVITE_DEFAULT, extras: true, isHero: null };
 /** Насколько заранее зовут: на день рождения — до месяца, на дополнительный праздник — до трёх недель */
 export const INVITE_AHEAD = { bday: 30, extra: 21 };
 /** Сколько ответов ждать, пока модель произнесёт выпавшее приглашение; потом — пауза для этого человека */
@@ -62,6 +62,7 @@ export function inviteCandidates(state, all = false) {
     const out = [];
     for (const c of state.cast || []) {
         if (!c?.id || !c.bday || c.off || (c.name && castBanned(state, c.name))) continue;
+        if (c.name && inviteCfg.isHero?.(c.name)) continue;                  // сам герой, записанный в «Люди»
         const start = nextOccurrence({ m: c.bday.m, d: c.bday.d }, today);
         const d = start - today;
         if (d > INVITE_AHEAD.bday) continue;
@@ -75,6 +76,7 @@ export function inviteCandidates(state, all = false) {
     for (const x of inviteCfg.extras ? (state.extras || []) : []) {
         const d = x.start - today;
         if (d < 0 || d > INVITE_AHEAD.extra) continue;
+        if (x.host && inviteCfg.isHero?.(x.host)) continue;                  // своё сборище героя — повод, а не приглашение
         const key = extraKey(x.id);
         if (!all && (dec[key] || (cool[key] ?? -1) > (state.turn || 0))) continue;
         out.push({ kind: 'extra', key, xid: x.id, name: x.name, host: x.host || null, whom: x.whom || 'both', day: x.start, d,
