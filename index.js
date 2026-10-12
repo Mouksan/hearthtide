@@ -447,7 +447,10 @@ function recOf(msg, field, text) {
 }
 const sideOf = (msg, text) => recOf(msg, 'ht_side', text);
 /** Уже есть ответ к этому тексту — или к почти тому же (чужая правка), а не к сильно дописанному («продолжить») */
-function recFresh(msg, field, text) {
+function recFresh(msg, field, text, exact = false) {
+    // свежесгенерированный ответ — только точное совпадение текста: после удаления свайпа номер свайпа может
+    // достаться новому, и старый ответ помощника принимался за ответ к новому тексту (запрос не уходил)
+    if (exact) { const map = msg?.extra?.[field]; return !!(map && (map[coreHash(text)] || map[hashText(text)])); }
     const r = recOf(msg, field, text);
     if (!r) return false;
     if (msg.extra[field][coreHash(text)] || msg.extra[field][hashText(text)]) return true;
@@ -2505,11 +2508,11 @@ const sideLoading = () => !!side && side.N === lastProcessedMsg();
 // Раньше это была строчка в большом задании помощника — модель её пропускала, и приглашения тихо пропадали.
 let confirmNeed = null;      // { N, hash, date, bd: [имена] } — что проверить после этого ответа
 let confirmSide = null;
-async function runConfirmSide(N) {
+async function runConfirmSide(N, exact = false) {
     const need = confirmNeed;
     if (!apiOn() || !isEnabled() || !need || need.N !== N || N !== lastProcessedMsg()) return;
     const msg = chat[N];
-    if (!msg || recFresh(msg, 'ht_confirm', msg.mes)) return;
+    if (!msg || recFresh(msg, 'ht_confirm', msg.mes, exact)) return;
     if (confirmSide?.hash === need.hash) return;                  // уже спрашиваем
     confirmSide?.ctl.abort();
     const me = { N, hash: need.hash, swipe: swOf(msg), ctl: new AbortController() };
@@ -2578,11 +2581,11 @@ function dateSideDue() {
     const left = d?.status === 'scheduled' ? dateHoursLeft(state) : null;
     return left != null && left <= 30;
 }
-async function runDateSide(N, attempt = 1) {
+async function runDateSide(N, attempt = 1, exact = false) {
     if (!apiOn() || !isEnabled() || !state || !dateSideDue()) return;
     const msg = chat[N];
     if (!msg || msg.is_user || msg.is_system || N !== lastProcessedMsg()) return;
-    if (recFresh(msg, 'ht_date', msg.mes)) return;          // к этому тексту уже есть
+    if (recFresh(msg, 'ht_date', msg.mes, exact)) return;          // к этому тексту уже есть
     dateSide?.ctl.abort();
     const me = { N, swipe: swOf(msg), ctl: new AbortController() };
     dateSide = me;
@@ -2658,14 +2661,15 @@ function cancelSide() {
 }
 
 /** Решить, нужен ли запрос после ответа N, и отправить */
-function maybeSide(N, force = false, extra = []) {
+/** newReply — только что сгенерированный ответ (новое сообщение или новый свайп): старые ответы помощника — лишь к тому же тексту */
+function maybeSide(N, force = false, extra = [], newReply = false) {
     if (isOpening(N)) return;
-    runConfirmSide(N);
-    runDateSide(N);
+    runConfirmSide(N, newReply);
+    runDateSide(N, 1, newReply);
     if (!apiOn() || !state || generating) return;
     const msg = chat[N];
     if (!msg || msg.is_user || msg.is_system || N !== lastProcessedMsg()) return;
-    if (recFresh(msg, 'ht_side', msg.mes) && !force) return;       // к этому тексту уже есть
+    if (recFresh(msg, 'ht_side', msg.mes, newReply) && !force) return;       // к этому тексту уже есть
     const phase = phaseOf(state);
     const needs = sideNeeds(state, phase);
     for (const k of extra) needs.add(k);
@@ -4498,8 +4502,16 @@ function noteCharSettings() {
 // ═══════════════════════════════════════════════════════════════
 let generating = false;
 
+// Какая генерация идёт: ответ после «продолжить» — без запроса к помощнику (как правка)
+let genType = null;
+// Чужие фоновые генерации (тихие запросы других расширений) и «написать за меня» — не новый ответ бота:
+// не обрываем запрос помощника, который уже в пути, и не считаем их началом хода
+const FOREIGN_GENS = ['quiet', 'impersonate'];
+
 function onGenerationStarted(type, params, dryRun) {
     if (dryRun) return;
+    if (FOREIGN_GENS.includes(type)) return;
+    genType = type || 'normal';
     generating = true;
     // свайп последнего ответа — промпт из состояния до него (см. withPromptState)
     promptSnapN = type === 'swipe' && state ? lastBotIndex() : null;
@@ -4511,11 +4523,18 @@ function onGenerationStarted(type, params, dryRun) {
     injectPrompts();
 }
 
-function onMessageReceived(id) {
+function onMessageReceived(id, type) {
     promptSnapN = null;                   // ответ пришёл — дальше промпты снова из живого состояния
     if (!apiOn()) { scheduleRenderAll(); return; }
     if (!state) loadState();
     processReply(Number(id));
+    // «продолжить» — дописали тот же ответ: пересобираем без запроса (перечитать — кнопкой ↻)
+    if ((type || genType) === 'continue') {
+        console.info(`[Hearthtide] «продолжить» сообщения ${id} — пересобрано без запроса к помощнику`);
+        sideAfterGen = null;
+        scheduleRenderAll();
+        return;
+    }
     // таверна ещё дописывает сообщение — запрос отправим, когда генерация закончится
     sideAfterGen = Number(id);
     // на случай, если событие конца генерации не придёт
@@ -4525,11 +4544,17 @@ let sideAfterGen = null;
 function onGenerationEnded() {
     generating = false;
     promptSnapN = null;
+    // «продолжить»: если таверна не прислала «ответ получен», пересобираем сами — тоже без запроса к помощнику
+    if (genType === 'continue' && apiOn() && state) {
+        const N = lastBotIndex();
+        if (N >= 0 && N === lastProcessedMsg()) processReply(N);
+    }
+    genType = null;
     scheduleEnsure();
     if (sideAfterGen != null) {
         const id = sideAfterGen;
         sideAfterGen = null;
-        setTimeout(() => maybeSide(id), 300);
+        setTimeout(() => maybeSide(id, false, [], true), 300);
     }
 }
 
@@ -4540,11 +4565,13 @@ function onMessageSwiped(id) {
         const m = chat[id];
         if (!m || m.is_user) return;
         const sw = m.swipes?.[m.swipe_id];
+        // листание на готовый свайп или удаление свайпа — только пересборка из того, что помощник уже присылал
+        // (узнаёт свой ответ по тексту); новый свайп сюда не попадает — он идёт как новый ответ (onMessageReceived)
         if (sw && sw.trim() && m.mes === sw && state.snapshots.some(s => s.beforeMsg === Number(id))) {
             processReply(Number(id));
-            maybeSide(Number(id));
+            console.info(`[Hearthtide] свайп ${id} — пересобрано без запроса к помощнику`);
         }
-        else scheduleRenderAll();
+        scheduleRenderAll();
     }, 150);
 }
 
