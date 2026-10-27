@@ -493,7 +493,7 @@ function dateUpRule(ctx) {
     const lang = langOf(ctx);
     const scope = 'in the messages marked [NEW]';
     if (d.status === 'scheduled') {
-        return `<!-- HT-DATE-UP\nSTART\nNEW | <task for ${charName}> | <${charName}'s thought>\n-->\nFill in the lines, never copy the <…> placeholders. Only if the date "${d.title}" (planned ${dateAtText(state, d.at)}; goal: ${d.goal || 'to be together'}) has actually begun ${scope}: START, then ${DATE_OPEN} NEW first steps toward the goal. ${stepFlow(ctx, d)} ${stepForm(ctx)} Never chores or anything off the date. Otherwise write nothing.`;
+        return `<!-- HT-DATE-UP\nSTART\nNEW | <task for ${charName}> | <${charName}'s thought>\n-->\nFill in the lines, never copy the <…> placeholders. Only if the date "${d.title}" (planned ${dateAtText(state, d.at)}; goal: ${d.goal || 'to be together'}) has actually begun ${scope} — they are at the place or already doing what was planned; getting ready, picking up, the road there or waiting is not the date yet: START, then ${DATE_OPEN} NEW first steps toward the goal. ${stepFlow(ctx, d)} ${stepForm(ctx)} Never chores or anything off the date. Otherwise write nothing.`;
     }
     const open = openSteps(d);
     const list = open.map(s => `${s.n}. ${s.t}`).join('\n');
@@ -650,8 +650,9 @@ function calRule(ctx) {
     const lang = langOf(ctx);
     // календарь продолжаем только от общих праздников; поводы из истории — отдельно, «не повторять»
     const ahead = (state.holidays || []).filter(x => state.today == null || x.start + x.days - 1 >= state.today);
-    const known = state.rebuild ? [] : ahead.filter(x => !x.story).map(x => `${x.name} (${isoOf(x.start)})`).slice(0, 5);
-    const storyKnown = ahead.filter(x => x.story).map(x => `${x.name} (${isoOf(x.start)})`).slice(0, 5);
+    const known = state.rebuild ? [] : ahead.filter(x => !x.story && !x.edited).map(x => `${x.name} (${isoOf(x.start)})`).slice(0, 5);
+    // поводы из истории и праздники, поправленные игроком, — уже в календаре, повторять их не нужно
+    const storyKnown = ahead.filter(x => x.story || x.edited).map(x => `${x.name} (${isoOf(x.start)})`).slice(0, 6);
     // дни рождения спрашиваем один раз: не указаны в карточке — значит, их нет, пока история не скажет
     const needB = (!state.birthdays?.user || !state.birthdays?.char) && !state.bdayAsked;
     const gap = ctx.skipGap;
@@ -842,10 +843,13 @@ Only if the latest messages show something new at "${ev?.title || 'the gathering
     if (needs.has('datewatch')) task.push(`<!-- HT-DATE title=… | goal=… | where=… | at=YYYY-MM-DD HH:MM | kind=… | started=… | agreed=… -->
 ${GOAL_RULE(ctx)}. Only if the latest messages show a date or an outing of ${userName} and ${charName} alone that isn't tracked yet: one of them asks the other for one (at — when; now if right away), or they are already on it together (started=yes). agreed=yes only if ${userName}'s own message already said yes to it or ${userName} proposed it; if ${charName} asked and ${userName} hasn't answered yet — agreed=no and no started.${kindField(ctx)} Leave it out otherwise.`);
     if (needs.has('new')) {
-        const known = [...(state.holidays || []).filter(x => x.start >= (state.today ?? 0) - 1).map(x => x.name), ...(ctx.offerNames || []), ...(ctx.passed || [])].filter(Boolean).slice(0, 12);
+        // и то, на что уже позвали или позовут (дополнительные праздники, принятые приглашения): иначе каждое «приходи на…»
+        // в истории становилось ещё одним поводом
+        const invited = [state.inv?.status !== 'declined' && state.inv?.name, ...(state.extras || []).map(x => x.name), ...(ctx.acceptedAhead || []).map(h => h.name)];
+        const known = [...new Set([...(state.holidays || []).filter(x => x.start >= (state.today ?? 0) - 1).map(x => x.name), ...invited, ...(ctx.offerNames || []), ...(ctx.passed || [])].filter(Boolean))].slice(0, 14);
         const no = (ctx.offerSeen || []).slice(-10);
-        task.push(`<!-- HT-NEW CAUSE | YYYY-MM-DD | DAYS | NAME | MEANING | TYPE | PREP | HOST -->
-Only a festive occasion the story has set up that isn't in the calendar: a celebration of someone's life event, an announced party, feast or festive gathering, a leisure trip or outing agreed on for a set day — or one the card or lore dates within a month. Not business, work or plot meetings, talks, deals, errands, fights or ordinary visits: those are the story, not occasions. Not a date of the two of them alone. CAUSE: what happened, a few words. NAME: what the occasion is (never just a person's name). Date: the day it takes place, counted from today; if it is already happening in the latest messages — today. TYPE: family | personal | religious | folk | memorial | gathering. HOST: who personally invited ${userName} or ${charName} to it in the story, empty if nobody did or they hold it themselves. At most two lines; leave the block out if there is none.${known.length ? ` Already known: ${known.join(', ')}.` : ''}${no.length ? ` Turned down by the player this year — never offer again, under any name: ${no.join('; ')}.` : ''}`);
+        task.push(`<!-- HT-NEW CAUSE | YYYY-MM-DD | DAYS | NAME | MEANING | TYPE | PREP | HOST | AGREED -->
+Only a festive occasion the story has set up that isn't in the calendar: a celebration of someone's life event, an announced party, feast or festive gathering, a leisure trip or outing agreed on for a set day — or one the card or lore dates within a month. A party, get-together or celebration at someone's place or out with friends, kin or colleagues for a set day counts, even if nobody has answered yet. Not business, work or plot meetings, talks, deals, errands, fights or casual drop-ins with no occasion: those are the story. Not a date of the two of them alone. CAUSE: what happened, a few words. NAME: what the occasion is (never just a person's name). Date: the day it takes place, counted from today; if it is already happening in the latest messages — today. TYPE: family | personal | religious | folk | memorial | gathering. HOST: who personally invited ${userName} or ${charName} to it in the story, empty if nobody did or they hold it themselves. AGREED: yes only if ${userName}'s own message already said yes to it or proposed it, or they are already there; no if ${userName} hasn't answered yet. At most two lines; leave the block out if there is none.${known.length ? ` Already known: ${known.join(', ')}.` : ''}${no.length ? ` Turned down by the player this year — never offer again, under any name: ${no.join('; ')}.` : ''}`);
     }
     if (needs.has('beat') && (h || (ctx.tracked || []).length)) {
         // что дать миру сделать в следующем ответе: шаг подготовки, которого ещё не было, — живыми людьми, вскользь;

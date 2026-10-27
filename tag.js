@@ -169,7 +169,7 @@ function normType(v) {
 
 /**
  * Новый повод из истории — предложение, которое игрок принимает или отклоняет:
- *   <!-- HT-NEW ЧТО_СЛУЧИЛОСЬ | YYYY-MM-DD | ДНЕЙ | НАЗВАНИЕ | СМЫСЛ | ТИП | PREP | КТО_ЛИЧНО_ПОЗВАЛ -->
+ *   <!-- HT-NEW ЧТО_СЛУЧИЛОСЬ | YYYY-MM-DD | ДНЕЙ | НАЗВАНИЕ | СМЫСЛ | ТИП | PREP | КТО_ЛИЧНО_ПОЗВАЛ | AGREED -->
  */
 export function parseOffers(text) {
     const inner = findBlock(text, 'HT-NEW');
@@ -188,6 +188,8 @@ export function parseOffers(text) {
             meaning: clean(cols[4], 240), type: normType(cols[5]),
             prep: isNaN(prep) ? null : Math.max(0, Math.min(45, prep)),
             host: /[<>]|^(host|none|nobody|никто|нет)$/i.test(String(cols[7] || '').trim()) ? null : cleanWords(cols[7], 60),
+            // {{user}} уже согласился своими словами (или сам предложил), или они уже там — без карточки
+            agreed: /^(yes|true|1|да)/i.test(String(cols[8] || '').trim()),
         });
     }
     return out.slice(0, 2);
