@@ -61,6 +61,22 @@ export function namesMatch(a, b) {
     return A.some(k => B.some(x => keysMatch(k, x)));
 }
 
+// общие слова в названиях поводов — по ним разные собрания не путаем
+const GENERIC_WORD = /^(день|дня|рожд|именин|birth|праздн|вечер|торже|отмеч|посид|тусов|встреч|собра|компа|отдел|колле|друзе|семей|party|celeb|eveni|gathe|night|meeti)/;
+/**
+ * Тот же повод под другим названием — для поводов почти в тот же день: «День юриста» и «Празднование Дня юриста»,
+ * «Посиделки в честь Дня юриста». Хватает одного общего значимого слова (не «день», «праздник», «вечер»…);
+ * namesMatch тут строг: лишнее слово впереди и другой падеж («Дня») делали их разными праздниками.
+ */
+export function sameOccasion(a, b) {
+    if (namesMatch(a, b)) return true;
+    const words = (t) => new Set(String(t || '').toLowerCase().replace(/ё/g, 'е').split(/[^\p{L}\d]+/u)
+        .filter(w => w.length >= 4 && !GENERIC_WORD.test(w)).map(w => w.slice(0, 5)));
+    const B = words(b);
+    for (const w of words(a)) if (B.has(w)) return true;
+    return false;
+}
+
 export function holidayId(h) {
     if (h.npc) return `bday-npc-${h.cid}@${h.start}`;
     if (h.extra) return `x-${h.xid}`;
@@ -134,6 +150,12 @@ export function allHolidays(state) {
         }
         for (const h of npcBirthdays(state)) if (!list.some(x => x.id === h.id)) list.push(h);
         for (const h of acceptedExtras(state)) if (!list.some(x => x.id === h.id)) list.push(h);
+        // повод из истории — то же, что принятое приглашение (помощник заносил его, пока это не сверялось): не дублируем
+        const invited = list.filter(h => h.extra || h.npc);
+        if (invited.length) for (let i = list.length - 1; i >= 0; i--) {
+            const h = list[i];
+            if (h.story && invited.some(x => Math.abs(x.start - h.start) <= 1 && sameOccasion(x.name, h.name))) list.splice(i, 1);
+        }
     }
     return list.sort((a, b) => a.start - b.start);
 }

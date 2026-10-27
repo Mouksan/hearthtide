@@ -1092,3 +1092,34 @@ dialog.ht-modal:not([open]) { display: none; }
 .ht-ring-off::after { animation: none; border-color: var(--ht-line); }
 .ht-ring-off > i { animation: none; color: var(--ht-mute); }
 .ht-noapi .ht-head { cursor: default; }
+
+/* ═══ «Могут позвать»: в инфоблоке (под «Дальше») и в настройках ═══ */
+.ht-invl-head { display: flex; align-items: center; gap: 6px; margin: 10px 0 2px; font-size: 0.85em; font-weight: 600; color: var(--ht-mute); }
+.ht-invl { display: flex; flex-wrap: wrap; align-items: center; gap: 4px 8px; padding: 5px 0; border-bottom: 1px solid var(--ht-line, color-mix(in srgb, var(--SmartThemeBodyColor) 14%, transparent)); }
+.ht-invl:last-child { border-bottom: 0; }
+.ht-invl-main { flex: 1 1 14em; min-width: 0; display: flex; align-items: baseline; gap: 7px; font-size: 0.92em; }
+.ht-invl-main > i { opacity: 0.7; flex: none; }
+.ht-invl-main > span { min-width: 0; overflow-wrap: anywhere; }
+.ht-invl-badge { display: inline-block; margin-left: 4px; padding: 0 6px; border-radius: 999px; font-style: normal; font-size: 0.82em; white-space: nowrap;
+    color: var(--ht-acc, var(--SmartThemeQuoteColor)); border: 1px solid currentColor; }
+.ht-invl-acts { display: flex; gap: 4px; flex: none; margin-left: auto; }
+.ht-invl-acts .ht-btn { padding: 3px 9px; font-size: 0.85em; }
+.ht-set-sub { margin-top: 4px; font-size: 0.88em; font-weight: 600; opacity: 0.85; }
+.ht-invlist { display: flex; flex-direction: column; }
+.ht-invlist .ht-invl-btn { margin: 0; padding: 3px 9px; font-size: 0.85em; display: inline-flex; align-items: center; gap: 5px; white-space: nowrap; }
+
+/* кнопка ↻ «перечитать этот ответ» на панели сообщения — только у ответов бота */
+#chat .mes[is_user="true"] .ht-reread { display: none; }
+
+/* ═══ Пульт: рубильники этого чата и «Сейчас висит» ═══ */
+.ht-set-sec.ht-pult { display: block; }
+.ht-pult > summary { cursor: pointer; list-style: none; }
+.ht-pult-body { display: flex; flex-direction: column; gap: 7px; margin-top: 7px; }
+.ht-pult > summary::-webkit-details-marker { display: none; }
+.ht-pult-chev { margin-left: auto; opacity: 0.6; transition: transform 0.2s ease; }
+.ht-pult[open] .ht-pult-chev { transform: rotate(180deg); }
+.ht-pult-list { display: flex; flex-direction: column; gap: 4px; }
+.ht-pult-row { display: flex; align-items: center; gap: 8px; font-size: 0.9em; }
+.ht-pult-row > span { flex: 1; min-width: 0; overflow-wrap: anywhere; }
+.ht-pult-row .ht-pult-x { margin: 0; flex: none; }
+#ht-pult-all.disabled { opacity: 0.5; pointer-events: none; }

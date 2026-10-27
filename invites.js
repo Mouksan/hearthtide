@@ -108,7 +108,7 @@ export function acceptedExtras(state) {
 }
 
 /** Новые дополнительные праздники от модели → в список: без повторов, без прошедших, не больше шести впереди */
-export function mergeExtras(state, list, langOk, namesMatch) {
+export function mergeExtras(state, list, langOk, namesMatch, sameOccasion = null) {
     let slip = false;
     state.extras = state.extras || [];
     for (const x of list || []) {
@@ -117,6 +117,8 @@ export function mergeExtras(state, list, langOk, namesMatch) {
         if (/(день\s*рожд|именин|birthday)/i.test(x.name)) continue;          // дни рождения считаются отдельно
         if (state.extras.some(y => namesMatch(y.name, x.name) && Math.abs(y.start - x.start) <= 7)) continue;
         if ((state.holidays || []).some(h => namesMatch(h.name, x.name) && Math.abs(h.start - x.start) <= 7)) continue;
+        // тот же повод уже в календаре под другим названием (из истории: «День юриста» — «Празднование Дня юриста»)
+        if (sameOccasion && (state.holidays || []).some(h => Math.abs(h.start - x.start) <= 1 && sameOccasion(h.name, x.name))) continue;
         // отклонённое в этом году под тем же названием — не предлагаем снова
         if ((state.offerSeen || []).some(y => namesMatch(y.name, x.name))) continue;
         const item = { ...x, id: extraId(x) };
