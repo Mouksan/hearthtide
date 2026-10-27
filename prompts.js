@@ -183,7 +183,7 @@ export function buildStatePrompt(ctx) {
         lines.push(`Also coming: ${hName(x, ctx)} — ${daysWord(x.start - state.today)}, on ${isoOf(x.start)}${x.npc || x.extra ? ' (invitation accepted)' : ''}${noted.length ? `; done so far: ${noted.join('; ')}` : ''}${cg?.text ? `; ${charName}'s gift: ${cg.text}${cg.done ? ' (given)' : ''}` : ''}. Getting ready may show in passing; the day itself hasn't come.`);
     }
     // без помощника: изредка (чем ближе, тем чаще) — пусть подготовка к принятому покажется в мире сама
-    if (phase.kind !== 'prep' && phase.kind !== 'today' && !state.beat && state.mentionNow && (ctx.tracked || []).length) {
+    if (ctx.hints !== false && phase.kind !== 'prep' && phase.kind !== 'today' && !state.beat && state.mentionNow && (ctx.tracked || []).length) {
         lines.push('This reply: let one of the coming occasions show once, in passing — someone of this world getting ready for it or speaking of it, a step not taken yet; never force it.');
     }
     // история отменила или перенесла праздник — модель знает, что его больше нет (пара ответов)
@@ -209,7 +209,7 @@ export function buildStatePrompt(ctx) {
         if (h.birthday && h.who === 'user') {
             lines.push(`People close to ${userName} are secretly preparing a surprise — keep it hidden from ${userName}; hints at most.`);
         }
-        if (!state.beat) lines.push(state.mentionNow
+        if (!state.beat) lines.push(state.mentionNow && ctx.hints !== false
             ? 'This reply: let the preparations show once, indirectly — as a consequence of them or a brief encounter with someone involved, never a restatement. Pick an angle not used before; never force it.'
             : 'This reply: keep the preparations in the background.');
     }
@@ -306,13 +306,13 @@ export function buildStatePrompt(ctx) {
         else lines.push(`${userName} joins: ${ev.title}${who}${ev.hook ? ` (it began: ${ev.hook})` : ''}. ${ev.turn >= state.turn - 1 ? 'Carry on from where it began' : 'Let it unfold'} over the next replies; ${userName} still makes every own choice.`);
     }
     // Кто может зайти в этот ответ — по очереди из людей праздника (дёшево, без отдельного запроса)
-    if (!busy && !state.beat && state.nudge) {
+    if (ctx.hints !== false && !busy && !state.beat && state.nudge) {
         lines.push(state.nudge.name
             ? `If the scene allows, ${state.nudge.name} can come into this reply, acting on what they want (${state.nudge.now})${phase.kind === 'today' ? ` or drawing ${userName} into what the day holds now` : ''} — in person or by word; one person, never a crowd.`
             : `If the scene allows, someone the occasion involves — kin or those its custom calls for — can come into this reply; one person, never a crowd.`);
     }
     // Что праздник может принести в этот ответ — придумал отдельный запрос по истории
-    if (!busy && state.beat) lines.push(`This reply, if the scene allows (it comes first; skip it if it doesn't fit): ${state.beat}`);
+    if (ctx.hints !== false && !busy && state.beat) lines.push(`This reply, if the scene allows (it comes first; skip it if it doesn't fit): ${state.beat}`);
     if (active) {
         lines.push(`If ${userName} is away from people (road, wilds, danger), the feast stays distant. The calendar never overrides the scene: an urgent or dramatic moment always comes first. Never write ${userName}'s thoughts, feelings, words or choices.`);
     }
@@ -761,7 +761,7 @@ All text values in these comments: ${lang} only.`];
     // (позвать, начать ивент, чем ивент кончился). Всё служебное по истории собирает помощник.
     const dt = state.date?.status === 'active' ? state.date : null;
     // выпал шанс — ивент или приглашение на свидание начинаются прямо в этом ответе, игрок решает кнопками
-    if (state.evRoll && ctx.evTarget) out.push(eventOfferRule(ctx));
+    if (state.evRoll && ctx.evTarget && !ctx.quiet) out.push(eventOfferRule(ctx));
     const evOpen = ctx.evTarget ? openEvent(state, ctx.evTarget.hid) : null;
     if (evOpen?.status === 'invited') out.push(`Add ev=joined to the HT line if ${userName} accepts the invitation, ev=declined if not.`);
     else if (evOpen) out.push(`When "${evOpen.title}" ends, add ev=done | ev_note=its outcome in one sentence to the HT line${evOpen.kind === 'party' ? '' : `; ev=skipped if ${userName} turned away`}.`);
@@ -770,7 +770,7 @@ All text values in these comments: ${lang} only.`];
     const asks = [];
     if (state.invRoll) asks.push(inviteAskRule(ctx));
     if (state.dateRoll && !dt) asks.push(state.datePlan ? dateAskRule(ctx) : dateOfferRule(ctx));
-    if (asks.length) out.push(`\n[Hearthtide — for the story, only if it fits]\n${asks.join('\n')}`);
+    if (asks.length && !ctx.quiet) out.push(`\n[Hearthtide — for the story, only if it fits]\n${asks.join('\n')}`);
     return out.join('\n');
 }
 

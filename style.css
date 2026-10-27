@@ -1110,3 +1110,16 @@ dialog.ht-modal:not([open]) { display: none; }
 
 /* кнопка ↻ «перечитать этот ответ» на панели сообщения — только у ответов бота */
 #chat .mes[is_user="true"] .ht-reread { display: none; }
+
+/* ═══ Пульт: рубильники этого чата и «Сейчас висит» ═══ */
+.ht-set-sec.ht-pult { display: block; }
+.ht-pult > summary { cursor: pointer; list-style: none; }
+.ht-pult-body { display: flex; flex-direction: column; gap: 7px; margin-top: 7px; }
+.ht-pult > summary::-webkit-details-marker { display: none; }
+.ht-pult-chev { margin-left: auto; opacity: 0.6; transition: transform 0.2s ease; }
+.ht-pult[open] .ht-pult-chev { transform: rotate(180deg); }
+.ht-pult-list { display: flex; flex-direction: column; gap: 4px; }
+.ht-pult-row { display: flex; align-items: center; gap: 8px; font-size: 0.9em; }
+.ht-pult-row > span { flex: 1; min-width: 0; overflow-wrap: anywhere; }
+.ht-pult-row .ht-pult-x { margin: 0; flex: none; }
+#ht-pult-all.disabled { opacity: 0.5; pointer-events: none; }

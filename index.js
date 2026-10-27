@@ -206,6 +206,8 @@ function defaultState() {
         mentionNow: false,
         snapshots: [],          // состояние ДО обработки ответа — для свайпов и удалений
         names: { user: [], char: [] },  // как героев зовут в самой истории (вписал игрок): «Адриан» для персоны «Hadrian»
+        pult: { quiet: false },         // рубильники этого чата (Пульт): ключ = false — механизм выключен
+        dismissed: {},                  // снятое игроком: вид → номер сообщения; снимки до него это не возвращают
     };
 }
 
@@ -324,6 +326,22 @@ function isHero(who, v) {
 /** Кто из героев назван: 'user' | 'char' | null */
 const heroOf = (v) => (isHero('user', v) ? 'user' : isHero('char', v) ? 'char' : null);
 
+// ─── Пульт: жёсткие рубильники этого чата ───
+// inv — приглашения в посты · dateRoll — свидания по кубику · dateStory — свидания, замеченные в сюжете ·
+// offers — поводы из сюжета · events — ивенты · hints — подсказки подготовки. quiet — всё сразу (только дата)
+const PULT_KEYS = ['inv', 'dateRoll', 'dateStory', 'offers', 'events', 'hints'];
+const pultQuiet = () => !!state?.pult?.quiet;
+/** Механизм включён в этом чате: не выключен своим рубильником и нет тихого режима */
+const pultOn = (k) => !pultQuiet() && state?.pult?.[k] !== false;
+/** Чего не спрашивать у помощника, раз механизм выключен */
+const PULT_NEEDS = { inv: ['extras'], dateRoll: ['dateplan'], dateStory: ['datewatch'], offers: ['new'], hints: ['beat'] };
+/** Снято игроком на сообщении N: снимки до него это не вернут (свайп, удаление сообщения) */
+function markDismissed(kind, N = lastProcessedMsg()) {
+    if (N == null || N < 0) return;
+    const d = state.dismissed || {};
+    state.dismissed = { ...d, [kind]: Math.max(d[kind] ?? -1, N) };
+}
+
 // пару сверяем, если bond не приходил столько ответов
 /** Личные, семейные поводы и встречи — не общий календарь: только через карточку «Принять / Отклонить» */
 const STORY_TYPES = ['family', 'personal', 'gathering'];
@@ -345,6 +363,7 @@ function ctxFor() {
         userName: getUserName(), charName: getCharName(),
         userAka: storyAliases('user'), charAka: storyAliases('char'),
         extrasOn: inviteCfg.extras,
+        quiet: pultQuiet(), hints: pultOn('hints'),
         part: dayPart(state.clock),
         placeName,
         placeUnnamed: !!placeName && GENERIC_PLACES.test(String(placeName).trim()),
@@ -384,7 +403,7 @@ function takeSnapshot(beforeMsg) {
     if (state.snapshots.length > 20) state.snapshots = state.snapshots.slice(-20);
 }
 // Решения игрока (удалённые праздники) переживают откаты
-const USER_FIELDS = ['names', 'readyNo', 'banned', 'bannedNames', 'birthdayOff', 'calIgnore', 'offerNo', 'offerSeen', 'evDecisions', 'castNo', 'dateDecisions', 'pairSet', 'bdDecisions', 'userGift', 'giftMode', 'decMsg'];
+const USER_FIELDS = ['names', 'pult', 'dismissed', 'readyNo', 'banned', 'bannedNames', 'birthdayOff', 'calIgnore', 'offerNo', 'offerSeen', 'evDecisions', 'castNo', 'dateDecisions', 'pairSet', 'bdDecisions', 'userGift', 'giftMode', 'decMsg'];
 
 function restoreSnapshot(snap) {
     const keep = state.snapshots;
@@ -404,6 +423,31 @@ function restoreSnapshot(snap) {
         console.info(`[Hearthtide] из снимка не берём просьбу позвать на «${state.invRoll.name}» — она уже не к месту`);
         state.invRoll = null;
     }
+    sanitizePending(snap.beforeMsg);
+}
+/** План свидания уже отклоняли (по названию; решения игрока — всегда из живого состояния) */
+const datePlanDeclined = (st = state) => { const t = st?.datePlan?.title; return !!t && state?.dateDecisions?.[String(t).toLowerCase()] === 'declined'; };
+/**
+ * Висящее из снимка — только если оно и сейчас уместно: не выключено на Пульте, не снято игроком
+ * (снимок до сообщения, на котором сняли, его не возвращает), свидание не отклонено, шанс свиданий не 0.
+ * Раньше отклонённое свидание возвращалось в промпт на каждом свайпе — снимок до сообщения его ещё помнил.
+ */
+function sanitizePending(at = null, st = state) {
+    // рубильники и снятое игроком — из живого состояния; правим st (состояние или данные снимка)
+    const d = state.dismissed || {};
+    const gone = (k) => at != null && d[k] != null && at <= d[k];
+    if (st.invRoll && (!pultOn('inv') || gone('inv'))) st.invRoll = null;
+    if ((st.dateRoll || st.datePlan) && (!pultOn('dateRoll') || !dateChanceSetting() || gone('date') || datePlanDeclined(st))) {
+        if (st === state) console.info(`[Hearthtide] не берём просьбу позвать на свидание${st.datePlan?.title ? ` «${st.datePlan.title}»` : ''} — отклонено или выключено`);
+        st.dateRoll = false; st.datePlan = null; st.dateRollTry = 0;
+    }
+    if (st.evRoll && (!pultOn('events') || gone('ev'))) st.evRoll = false;
+    if (st.beat && (!pultOn('hints') || gone('beat'))) st.beat = null;
+    if (!pultOn('offers') && st.offers?.length) st.offers = [];
+    // карточки выключенного: приглашение, свидание (когда выключены оба вида свиданий), ивент
+    if (!pultOn('inv') && st.inv?.status === 'offered') st.inv = null;
+    if (!pultOn('dateRoll') && !pultOn('dateStory') && ['offered', 'pending'].includes(st.date?.status)) st.date = null;
+    if (!pultOn('events')) for (const e of st.evts || []) if (e.status === 'offered') { e.status = 'declined'; e.lastUpdate = (st.turn ?? 0) - 1; }
 }
 /** Просьба позвать устарела: шанс 0, по приглашению уже решили, зовёт сам герой, или такого приглашения больше нет */
 function staleInvRoll() {
@@ -847,6 +891,8 @@ function processReply(N) {
     if (!inviteCfg.extras) extrasIn.length = 0;
     // ── Сборища, которые устраивают сами герои, — не приглашения, а поводы ──
     offersIn.push(...ownGatherings(extrasIn));
+    // поводы из сюжета выключены на Пульте — ни карточек, ни «сразу в календарь»
+    if (!pultOn('offers')) offersIn.length = 0;
     // ── Поводы из истории — ждут решения игрока ──
     offersAgreed = [];
     if (takeOffers(offersIn)) slip = true;
@@ -1196,7 +1242,7 @@ function processReply(N) {
     state.evRoll = false;
     const tgt = evTarget(phase);
     const evChance = evChanceSetting();
-    if (tgt && evChance > 0 && !openEvent(state, tgt.hid) && !offeredEvent(state)
+    if (tgt && evChance > 0 && pultOn('events') && !openEvent(state, tgt.hid) && !offeredEvent(state)
         && state.turn - (state.lastEventEnd ?? -99) >= EVENT_COOLDOWN
         && state.turn - Math.max(-99, ...(state.evts || []).filter(e => e.hid === tgt.hid).map(e => e.turn)) >= EVENT_COOLDOWN) {
         const r = rollFor(text, state.turn);
@@ -1211,7 +1257,8 @@ function processReply(N) {
     // Выпало, а модель промолчала — просим ещё раз, настойчивее (один раз); потом — новый бросок
     // свободно — всё, кроме идущего, предложенного и намеченного (раньше «не состоялось» навсегда блокировало броски)
     const free = !['active', 'offered', 'scheduled', 'pending'].includes(state.date?.status);
-    const di = dateChanceInfo(state, state.turn, dateChanceSetting());
+    // свидания по кубику выключены на Пульте — как шанс 0: ни бросков, ни повторных просьб
+    const di = pultOn('dateRoll') ? dateChanceInfo(state, state.turn, dateChanceSetting()) : { chance: 0, why: 'off' };
     if (free && hadDateRoll && !dateIn && !conf && state.datePlan && di.chance > 0) {
         // проверка «позвали ли вслух» ещё не ответила — ответ обработается заново, когда она придёт
         state.dateRoll = true;
@@ -1637,6 +1684,7 @@ function inviteMatch(name) {
         || null;
 }
 function handleInvite(small, conf, N, text = '') {
+    if (!pultOn('inv')) return;                       // приглашения выключены на Пульте — карточек нет
     const old = state.inv;
     if (old && state.today != null && state.today > old.day) state.inv = null;                       // день прошёл
     // игрок ответил на приглашение своей репликой в ролплее, а не кнопкой — то же решение, что по кнопке
@@ -1698,7 +1746,7 @@ function textInvites(text, c) {
     return INVITE_WORDS.test(t) && [c.name, c.host].some(v => v && seenInStory(v, t));
 }
 function inviteWatch(text, rolled, marked = null) {
-    if (state.inv?.status === 'offered') return [];
+    if (!pultOn('inv') || state.inv?.status === 'offered') return [];
     const t = String(text || '').toLowerCase().replace(/ё/g, 'е');
     const asks = INVITE_WORDS.test(t);
     const out = [];
@@ -1719,7 +1767,7 @@ function rollInvite(text, had, conf = null) {
         had = null;
     }
     // шанс приглашений 0 — никто никуда не зовёт: ни новых бросков, ни повторных просьб
-    if (!inviteCfg.base) { state.invRoll = null; return; }
+    if (!inviteCfg.base || !pultOn('inv')) { state.invRoll = null; return; }
     // проверка «позвали ли вслух» ещё не ответила — ответ обработается заново, когда она придёт; попытку не тратим
     if (had && !conf && apiOn() && state.inv?.status !== 'offered' && state.inv?.key !== had.key && !state.bdDecisions?.[had.key]) { state.invRoll = had; return; }
     if (had && state.inv?.key !== had.key && !state.bdDecisions?.[had.key]) {
@@ -2595,7 +2643,8 @@ function injectPromptsNow() {
     const on = apiOn() && state;
     const ctx = on ? ctxFor() : null;
     // scan = false: лорбук не читает наши блоки — иначе имена из «Людей» и праздника срабатывают на ключи
-    setExtensionPrompt(PROMPT_STATE, on ? buildStatePrompt(ctx) : '', extension_prompt_types.IN_CHAT, 4, false, extension_prompt_roles.SYSTEM);
+    // тихий режим: основной модели — только требование тега с датой, никаких заметок и подсказок
+    setExtensionPrompt(PROMPT_STATE, on && !ctx.quiet ? buildStatePrompt(ctx) : '', extension_prompt_types.IN_CHAT, 4, false, extension_prompt_roles.SYSTEM);
     setExtensionPrompt(PROMPT_TAG, on && !isChatCompletion() ? buildTagPrompt(ctx) : '', extension_prompt_types.IN_CHAT, 0, false, extension_prompt_roles.SYSTEM);
 }
 
@@ -2803,6 +2852,8 @@ function maybeSide(N, force = false, extra = [], newReply = false) {
     const needs = sideNeeds(state, phase);
     for (const k of extra) needs.add(k);
     if (force) needs.add('new');
+    // выключенное на Пульте у помощника не спрашиваем — и токены целее
+    for (const [k, list] of Object.entries(PULT_NEEDS)) if (!pultOn(k)) for (const x of list) needs.delete(x);
     else if (!sideDue(state, phase, needs)) return;
     // после сбоя издалека не долбим: подождём пару ответов (в праздник — пробуем каждый раз)
     if (!force && phase.kind !== 'prep' && phase.kind !== 'today' && (state.turn || 0) - sideFailTurn < 3) return;
@@ -2977,6 +3028,7 @@ function renderAll() {
     document.querySelectorAll('#chat .mes[mesid]').forEach(el => renderBlock(Number(el.getAttribute('mesid'))));
     updateDateWhy();
     syncInviteList();
+    syncPult();
     addRereadButtons();
 }
 
@@ -3355,6 +3407,8 @@ function decideDate(yes) {
         if (yes) acceptInto(st, st.date);
         else { st.dateDeclined = { title: st.date.title, turn: st.turn }; st.date = null; st.lastDateEnd = st.turn; }
     });
+    // отказ переживает свайп: снимок до этого сообщения не вернёт просьбу позвать на свидание
+    if (!yes) markDismissed('date', d.msg);
 }
 function endDateNow() {
     if (state.date?.status !== 'active') return;
@@ -4024,7 +4078,7 @@ function bodyHtml(view, live, tab = 'now') {
         <div class="ht-up"><i class="fa-solid ${holidayIcon(u)}"></i>
         <span>${esc(u.name)}${u.invited ? ` <i class="fa-solid fa-envelope-open-text ht-up-inv" title="${esc(L().alsoInvited)}"></i>` : ''}</span><b>${u.daysTo === 1 ? L().tomorrow : L().inDays(daysWord(u.daysTo))}</b>${u.invited ? '' : editBtn(u.id)}${delBtn(u.id)}</div>`).join('');
     // кто может позвать — только в живом инфоблоке (последний ответ), с кнопками
-    const mayRows = live ? inviteRowsHtml(L(), (act, key, icon, label) =>
+    const mayRows = live && pultOn('inv') ? inviteRowsHtml(L(), (act, key, icon, label) =>
         `<button class="ht-btn ${act === 'invl-yes' ? 'ht-btn-main' : 'ht-btn-quiet'}" data-act="${act}" data-key="${esc(key)}"><i class="fa-solid ${icon}"></i><span>${esc(label)}</span></button>`) : '';
     const mayInvite = mayRows ? `<div class="ht-invl-head"><i class="fa-solid fa-envelope"></i>${esc(L().mayInvite)}</div>${mayRows}` : '';
     // другие праздники и встречи, которые идут сегодня, — одной строкой, без «готовятся»
@@ -4449,6 +4503,25 @@ function injectSettingsPanel() {
                     </div>
                     <small class="ht-set-note ht-set-explain" id="ht-note-pace"><i class="fa-solid fa-circle-info"></i><span>${esc(PACE_NOTE[datePaceSetting()])}</span></small>
                 </section>
+                <details class="ht-set-sec ht-pult">
+                    <summary class="ht-set-title"><i class="fa-solid fa-sliders"></i>Пульт <small id="ht-pult-who"></small><i class="fa-solid fa-chevron-down ht-pult-chev"></i></summary>
+                    <div class="ht-pult-body">
+                    <small class="ht-set-note"><i class="fa-solid fa-circle-info"></i><span>Рубильники для этого чата. Выключенное не попадает ни в промпт, ни в карточки. Шансы выше — для всех чатов, а здесь можно жёстко выключить что-то только в этом сюжете.</span></small>
+                    <label class="checkbox_label"><input type="checkbox" id="ht-pult-quiet">Тихий режим</label>
+                    <small class="ht-set-note"><i class="fa-solid fa-moon"></i><span>Hearthtide только следит за датой и ведёт записи: ничего не подсказывает модели, никуда не зовёт, карточек не показывает.</span></small>
+                    <label class="checkbox_label"><input type="checkbox" id="ht-pult-inv">Приглашения в посты</label>
+                    <label class="checkbox_label"><input type="checkbox" id="ht-pult-dateRoll">Свидания по кубику</label>
+                    <label class="checkbox_label"><input type="checkbox" id="ht-pult-dateStory">Свидания, замеченные в сюжете</label>
+                    <label class="checkbox_label"><input type="checkbox" id="ht-pult-offers">Поводы из сюжета</label>
+                    <small class="ht-set-note"><i class="fa-solid fa-circle-info"></i><span>Карточки «Принять / Изменить / Отклонить».</span></small>
+                    <label class="checkbox_label"><input type="checkbox" id="ht-pult-events">Ивенты</label>
+                    <label class="checkbox_label"><input type="checkbox" id="ht-pult-hints">Подсказки подготовки</label>
+                    <small class="ht-set-note"><i class="fa-solid fa-circle-info"></i><span>Подсказки модели вроде «кто-то украшает зал».</span></small>
+                    <div class="ht-set-sub">Сейчас висит</div>
+                    <div class="ht-pult-list" id="ht-pult-list"></div>
+                    <div class="menu_button ht-set-wide" id="ht-pult-all"><i class="fa-solid fa-broom"></i> Снять всё</div>
+                    </div>
+                </details>
               </div>
             </div>
         </div>`);
@@ -4559,6 +4632,13 @@ function injectSettingsPanel() {
             if (t) decideInvKey(t.dataset.key, t.dataset.act === 'invl-yes');
         });
         syncInviteList();
+        for (const k of ['quiet', ...PULT_KEYS]) document.getElementById(`ht-pult-${k}`)?.addEventListener('change', e => setPult(k, e.target.checked));
+        document.getElementById('ht-pult-list')?.addEventListener('click', e => {
+            const t = e.target.closest('.ht-pult-x');
+            if (t) dismissPending(t.dataset.key);
+        });
+        document.getElementById('ht-pult-all')?.addEventListener('click', dismissAll);
+        syncPult();
         document.getElementById('ht-set-prev')?.addEventListener('change', e => {
             localStorage.setItem(LS.showPrev, e.target.checked ? 'true' : 'false');
             renderAll();
@@ -4628,8 +4708,120 @@ function syncStoryNames() {
     if (w) w.textContent = chat.length ? '· этот чат' : '';
 }
 
+// ─── Пульт: что висит прямо сейчас и как это снять — тихо, модель ничего не узнаёт, обид нет ───
+function pendingItems() {
+    if (!state) return [];
+    const out = [];
+    if (state.invRoll) out.push({ key: 'invRoll', label: `Просьба позвать: ${state.invRoll.name}` });
+    if (state.inv?.status === 'offered') out.push({ key: 'invCard', label: `Приглашение ждёт ответа: ${state.inv.name}` });
+    if (state.dateRoll || state.datePlan) out.push({ key: 'dateRoll', label: state.datePlan?.title ? `План свидания: ${state.datePlan.title}` : 'Выпало свидание — позовут в следующем ответе' });
+    const ds = state.date?.status;
+    if (ds === 'offered' || ds === 'pending') out.push({ key: 'dateCard', label: `Свидание ждёт ответа: ${state.date.title}` });
+    if (ds === 'scheduled') out.push({ key: 'dateCard', label: `Намечено свидание: ${state.date.title}` });
+    if (state.evRoll) out.push({ key: 'evRoll', label: 'Выпал ивент' });
+    const oe = offeredEvent(state);
+    if (oe) out.push({ key: `ev:${oe.id}`, label: `Ивент ждёт ответа: ${oe.title}` });
+    if (state.beat) out.push({ key: 'beat', label: `Подсказка на следующий ответ: ${state.beat}` });
+    for (const o of state.offers || []) out.push({ key: `offer:${o.id}`, label: `Повод ждёт решения: ${o.name}` });
+    return out;
+}
+/** Снять одно висящее: в состоянии и в снимках, и запомнить, чтобы не вернулось само. save=false — снимаем пачкой */
+function dismissPending(key, save = true) {
+    if (!state || !key) return;
+    const N = lastProcessedMsg();
+    const both = (fn) => { fn(state); applyToSnapshots(fn); };
+    const forget = (k) => { if (k) state.invCool = { ...(state.invCool || {}), [k]: INV_FORGOT }; };
+    const noDate = (t) => { if (t) state.dateDecisions = { ...(state.dateDecisions || {}), [String(t).toLowerCase()]: 'declined' }; };
+    if (key === 'invRoll') {
+        forget(state.invRoll?.key);
+        both(st => { st.invRoll = null; });
+        markDismissed('inv', N);
+    } else if (key === 'invCard') {
+        const k = state.inv?.key;
+        forget(k);
+        both(st => { if (st.inv?.key === k && st.inv.status === 'offered') st.inv = null; });
+    } else if (key === 'dateRoll') {
+        noDate(state.datePlan?.title);
+        both(st => { st.dateRoll = false; st.datePlan = null; st.dateRollTry = 0; });
+        state.lastDateEnd = state.turn;                       // обычная пауза между свиданиями
+        markDismissed('date', N);
+    } else if (key === 'dateCard') {
+        const t = state.date?.title;
+        noDate(t);
+        both(st => { if (st.date && st.date.title === t && ['offered', 'pending', 'scheduled'].includes(st.date.status)) { st.date = null; st.lastDateEnd = st.turn; } });
+        markDismissed('date', N);
+    } else if (key === 'evRoll') {
+        both(st => { st.evRoll = false; });
+        markDismissed('ev', N);
+    } else if (key.startsWith('ev:')) {
+        const id = key.slice(3);
+        const e = (state.evts || []).find(x => x.id === id);
+        if (e) state.evDecisions = { ...(state.evDecisions || {}), [evKey(e)]: 'declined' };
+        // без «отказался — не настаивай» в промпте: снимаем тихо
+        both(st => { const x = (st.evts || []).find(y => y.id === id && y.status === 'offered'); if (x) { x.status = 'declined'; x.lastUpdate = (st.turn ?? 0) - 1; st.lastEventEnd = st.turn; } });
+    } else if (key === 'beat') {
+        both(st => { st.beat = null; });
+        markDismissed('beat', N);
+    } else if (key.startsWith('offer:')) {
+        declineOffer(key.slice(6));
+    }
+    console.info(`[Hearthtide] Пульт: снято «${key}»`);
+    if (!save) return;
+    saveState();
+    injectPrompts();
+    renderAll();
+}
+function dismissAll() {
+    const list = pendingItems();
+    if (!list.length) return;
+    for (const it of list) dismissPending(it.key, false);
+    saveState();
+    injectPrompts();
+    renderAll();
+}
+/** Рубильник этого чата. Выключили — всё висящее по нему уходит сразу */
+const PULT_PENDING = { inv: ['invRoll', 'invCard'], dateRoll: ['dateRoll'], offers: [], events: ['evRoll'], hints: ['beat'] };
+function setPult(k, on) {
+    if (!chat.length) return;
+    if (!state) loadState();
+    state.pult = { ...(state.pult || {}), [k]: !!on };
+    console.info(`[Hearthtide] Пульт: ${k} — ${on ? 'вкл.' : 'выкл.'}`);
+    const off = k === 'quiet' ? (on ? PULT_KEYS : []) : (on ? [] : [k]);
+    for (const x of off) {
+        for (const key of PULT_PENDING[x] || []) dismissPending(key, false);
+        if (x === 'offers') { state.offers = []; applyToSnapshots(st => { st.offers = []; }); }
+    }
+    // карточки выключенного (приглашение, свидание, ивент) — та же уборка, что и при откате к снимку
+    sanitizePending();
+    applyToSnapshots(st => sanitizePending(null, st));
+    saveState();
+    injectPrompts();
+    renderAll();
+}
+function syncPult() {
+    const has = !!chat.length && !!state;
+    const quiet = pultQuiet();
+    for (const k of ['quiet', ...PULT_KEYS]) {
+        const el = document.getElementById(`ht-pult-${k}`);
+        if (!el) continue;
+        el.checked = k === 'quiet' ? quiet : state?.pult?.[k] !== false;
+        el.disabled = !has || (k !== 'quiet' && quiet);
+    }
+    const w = document.getElementById('ht-pult-who');
+    if (w) w.textContent = has ? '· этот чат' : '';
+    const list = document.getElementById('ht-pult-list');
+    if (!list) return;
+    const items = has ? pendingItems() : [];
+    list.innerHTML = items.length
+        ? items.map(it => `<div class="ht-pult-row"><span>${esc(it.label)}</span><div class="menu_button menu_button_icon ht-pult-x" data-key="${esc(it.key)}" title="Снять"><i class="fa-solid fa-xmark"></i></div></div>`).join('')
+        : `<small class="ht-set-note"><i class="fa-solid fa-check"></i><span>Ничего не висит.</span></small>`;
+    const all = document.getElementById('ht-pult-all');
+    if (all) all.classList.toggle('disabled', !items.length);
+}
+
 // Эпоха и вера в настройках — для текущего чата
 function syncCharSettings() {
+    syncPult();
     syncStoryNames();
     const era = document.getElementById('ht-set-era');
     if (era) era.value = eraMode();
