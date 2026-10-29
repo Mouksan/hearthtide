@@ -11,7 +11,7 @@ import {
 import { eventSource, event_types } from '../../../../scripts/events.js';
 
 import { dayPart, plural, parseDate, fromDayNum, isoOf, dayNum } from './dates.js';
-import { slimSmallTag, parseReady, parseExtras, parseSmall, parseCalendar, parsePrep, parseDay, parseRecap, parsePeople, parseEvents, parseOffers, parseBeat, parseCast, parseDateBlock, parseDateUp, parseRecapParts, stripBlocks } from './tag.js';
+import { slimSmallTag, parseReady, parseAway, parseExtras, parseSmall, parseCalendar, parsePrep, parseDay, parseRecap, parsePeople, parseEvents, parseOffers, parseBeat, parseCast, parseDateBlock, parseDateUp, parseRecapParts, stripBlocks } from './tag.js';
 import { PAIR_DEFAULT, bondCap, dateKindFor, isFriendlyDate, newDate, startDate, applyDateUp, openSteps, goalOpen, doneCount, toggleStep, finishDate, dateChanceInfo, migrateDate, DATE_MISS_HOURS, DATE_OPEN, DATE_SKIP_END, DATE_SKIP_HARD, DATE_CLOSE_TURNS, DATE_QUIET, goalNeed, paceAuto, stepKinds, MISS_PAIR } from './romance.js';
 import { CAST_GROUPS, KIN_GROUPS, ROM_KEYS, isKin, samePerson, findCast, castBanned, parseBday, bdayText, bdayIn, ageOf, relLevel, romLevel, clampRel, mergeCast, migrateCast, nameCandidates } from './cast.js';
 import { phaseOf, mentionEvery, holidayId, allHolidays, banKeys, isBanned, namesMatch, passedThisYear, sameOccasion, hasGifts, openEvent, offeredEvent, EVENT_CHANCE_DEFAULT, EVENT_COOLDOWN, OPEN_STATUSES, sideNeeds, sideDue, CENSUS_DEPTH, dateHoursLeft, npcBdKey, npcBdOn, npcHoliday, giftJoint, trackedOccasions, charGiftOf, activeOccasions, occTier, preparingNow } from './calendar.js';
@@ -39,6 +39,7 @@ const LS = {
     dateLevel: 'hearthtide_date_level',   // сложность свиданий: easy | hard
     evChance: 'hearthtide_ev_chance',     // шанс случайного ивента на идущем мероприятии после ответа (%)
     datePace: 'hearthtide_date_pace',     // темп романтики: auto (по истории) | slow | fast
+    prepMode: 'hearthtide_prep_mode',     // подготовка к празднику: offscreen (за кадром, только инфоблок) | story (в постах, как у авторки)
     invChance: 'hearthtide_inv_chance',   // шанс приглашения за ответ при самом близком дне и человеке (%), 0 — выкл.
     invExtras: 'hearthtide_inv_extras',   // придумывать ли сборища из жизни героев
 };
@@ -64,6 +65,7 @@ const evChanceSetting = () => { const n = Number(lsGet(LS.evChance, String(EVENT
 const dateChanceSetting = () => { const n = Number(lsGet(LS.dateChance, '6')); return isNaN(n) ? 6 : Math.max(0, Math.min(30, n)); };
 const invChanceSetting = () => { const n = Number(lsGet(LS.invChance, String(INVITE_DEFAULT))); return isNaN(n) ? INVITE_DEFAULT : Math.max(0, Math.min(INVITE_BASE, n)); };
 const invExtrasSetting = () => lsGet(LS.invExtras, 'true') !== 'false';
+const prepMode = () => (lsGet(LS.prepMode, 'offscreen') === 'story' ? 'story' : 'offscreen');
 /** Настройки приглашений → в модуль приглашений (броски, список кандидатов, нужны ли сборища) */
 function syncInviteCfg() {
     inviteCfg.base = invChanceSetting();
@@ -196,6 +198,7 @@ function defaultState() {
         skipFrom: null,         // день, с которого время прыгнуло далеко вперёд — спросить, какие праздники проскочили
         beat: null,             // что праздник может принести в следующий ответ (от отдельного запроса)
         beatLog: [],            // последние такие подсказки — чтобы не повторялись
+        readyPush: null,        // { hid, t } — пункт «Уже сделано», который игрок попросил вплести в следующий ответ (один раз)
         lastSideTurn: -99,      // когда отдельный запрос последний раз дошёл
         nudge: null,            // кто из людей праздника может зайти в следующий ответ
         nudgeIdx: 0,
@@ -363,7 +366,7 @@ function ctxFor() {
         userName: getUserName(), charName: getCharName(),
         userAka: storyAliases('user'), charAka: storyAliases('char'),
         extrasOn: inviteCfg.extras,
-        quiet: pultQuiet(), hints: pultOn('hints'),
+        quiet: pultQuiet(), hints: pultOn('hints'), prepOff: prepMode() === 'offscreen',
         part: dayPart(state.clock),
         placeName,
         placeUnnamed: !!placeName && GENERIC_PLACES.test(String(placeName).trim()),
@@ -762,6 +765,8 @@ function processReply(N) {
     const prep = both(parsePrep);
     // подготовка по истории: номера — из списка, который ушёл с запросом помощника
     const readySide = sideText && sideAsked.includes('ready') ? parseReady(sideText) : null;
+    // подготовка за кадром — пишет помощник сам (по запросу «beat»), в пост это не идёт
+    const awaySide = sideText && sideAsked.includes('beat') && prepMode() === 'offscreen' ? parseAway(sideText) : [];
     const day = both(parseDay);
     const recap = both(parseRecap);
     const recapParts = both(parseRecapParts);
@@ -803,7 +808,8 @@ function processReply(N) {
         }
     }
     if (sideRec) state.lastSideTurn = state.turn;
-    if (beat && !/^none\b/i.test(beat)) {
+    // за кадром: подготовку в пост не подкидываем (в сам праздничный день подсказка — как была)
+    if (beat && !/^none\b/i.test(beat) && !(prepMode() === 'offscreen' && phaseOf(state).kind !== 'today')) {
         state.beat = beat;
         state.beatLog = [...(state.beatLog || []), beat].slice(-3);
     }
@@ -1101,6 +1107,7 @@ function processReply(N) {
 
     // ── Подготовка по истории: что сделано, подарки, отменили или перенесли ──
     if (readySide && applyReady(readySide, sideRec.occ || trackedOccasions(state).map(h => h.id))) slip = true;
+    if (awaySide.length && applyReady({ done: awaySide.map(x => ({ ...x, off: true })), gifts: [], off: [], sum: [] }, sideRec.occ || trackedOccasions(state).map(h => h.id))) slip = true;
     if (sideAsked.includes('ready')) state.readySeenMsg = N;
 
     // ── Подготовка, день праздника, итог — привязываем к текущей фазе ──
@@ -1211,6 +1218,8 @@ function processReply(N) {
     if (sideAsked.includes('replan') && !day && phase.kind === 'today' && phase.h) {
         state.planPart[`${phase.h.id}#${phase.dayIndex}`] = dayPart(state.clock) || 'morning';
     }
+    // пункт подготовки по кнопке ушёл в этот ответ — один раз
+    if (state.readyPush) state.readyPush = null;
     // воспоминание по кнопке ушло в этот ответ — больше не повторяем
     if (state.recall) {
         const fb = state.flashbacks.find(f => f.id === state.recall);
@@ -1421,6 +1430,7 @@ function applyReady(r, occ) {
         if (!h) { log.push(`№${d.i} — нет такого праздника, пропущено`); continue; }
         // подготовка — только до начала: то, что происходит на самом празднике, — не «уже сделано»
         if (h.start <= state.today) { log.push(`${displayName(h)} уже идёт — «${d.t}» не подготовка, пропущено`); continue; }
+        if (d.off && !pultOn('hints')) continue;                    // подсказки подготовки выключены на Пульте
         // шаг подготовки — коротко; длинная фраза — это пересказ сцены, а не «что сделано»
         if (d.t.split(/\s+/).length > 9) { log.push(`«${d.t}» — пересказ, а не шаг подготовки, пропущено`); continue; }
         if (!langOk(d.t)) { slip = true; continue; }
@@ -1428,7 +1438,7 @@ function applyReady(r, occ) {
         if ([R.sum, ...R.log.map(x => x.t)].some(t => t && sameFact(t, d.t))) continue;   // уже записано
         if ((state.readyNo?.[h.id] || []).some(t => sameFact(t, d.t))) continue;            // игрок убрал этот пункт
         const who = whoOf(/^(неизвестн|незнаком|кто-?то|unknown|someone|nobody|\?)/i.test(String(d.who || '').trim()) ? '' : d.who);
-        R.log.push({ t: d.t, who: who.kind === 'none' ? null : who.name, turn: state.turn });
+        R.log.push({ t: d.t, who: who.kind === 'none' ? null : who.name, turn: state.turn, ...(d.off ? { off: true } : {}) });
         if (R.log.length > 12) R.log = R.log.slice(-12);
         log.push(`${displayName(h)}: ${d.t}`);
     }
@@ -2610,7 +2620,8 @@ function trackCard(x) {
 function readyView(hid) {
     const r = state.ready?.[hid];
     if (!r || (!r.sum && !r.log?.length && !Object.keys(r.gifts || {}).length)) return null;
-    return { hid, sum: r.sum || null, log: (r.log || []).slice(-5).map(x => ({ t: x.t, who: x.who || null, fresh: x.turn === state.turn })),
+    return { hid, sum: r.sum || null, log: (r.log || []).slice(-5).map(x => ({ t: x.t, who: x.who || null, fresh: x.turn === state.turn, off: !!x.off,
+            pushed: state.readyPush?.hid === hid && state.readyPush?.t === x.t })),
         more: Math.max(0, (r.log || []).length - 5), gifts: Object.entries(r.gifts || {}).map(([who, g]) => ({ who, ...g })) };
 }
 
@@ -3995,7 +4006,7 @@ function readyHtml(rd, live, max = 5) {
     return `<div class="ht-ready">
         <span class="ht-ready-title">${esc(L().readyDone)}</span>
         ${rd.sum ? `<p class="ht-ready-sum">${esc(capFirst(rd.sum))}</p>` : ''}
-        ${items.length ? `<ul>${items.map(x => `<li class="${x.fresh && live ? 'ht-ready-new' : ''}"><i class="fa-solid fa-check"></i><span>${esc(capFirst(x.t))}${x.who ? `<em>${esc(x.who)}</em>` : ''}</span>${live ? `<button class="ht-ready-del" data-act="ready-del" data-hid="${esc(rd.hid)}" data-t="${esc(x.t)}" title="${esc(L().readyDel)}" aria-label="${esc(L().readyDel)}"><i class="fa-solid fa-xmark"></i></button>` : ''}</li>`).join('')}</ul>` : ''}
+        ${items.length ? `<ul>${items.map(x => `<li class="${x.fresh && live ? 'ht-ready-new' : ''}${x.off ? ' ht-ready-off' : ''}"><i class="fa-solid ${x.off ? 'fa-moon' : 'fa-check'}"${x.off ? ` title="${esc(L().readyOff)}"` : ''}></i><span>${esc(capFirst(x.t))}${x.who ? `<em>${esc(x.who)}</em>` : ''}</span>${live ? `<button class="ht-ready-push${x.pushed ? ' ht-on' : ''}" data-act="ready-push" data-hid="${esc(rd.hid)}" data-t="${esc(x.t)}" title="${esc(x.pushed ? L().readyPushOn : L().readyPush)}" aria-label="${esc(L().readyPush)}" aria-pressed="${x.pushed}"><i class="fa-solid fa-share"></i></button><button class="ht-ready-del" data-act="ready-del" data-hid="${esc(rd.hid)}" data-t="${esc(x.t)}" title="${esc(L().readyDel)}" aria-label="${esc(L().readyDel)}"><i class="fa-solid fa-xmark"></i></button>` : ''}</li>`).join('')}</ul>` : ''}
         ${more > 0 && !rd.sum ? `<small class="ht-mute">${esc(L().readyMore(more))}</small>` : ''}
         ${(rd.gifts || []).map(g => `<em class="ht-chip"><i class="fa-solid fa-gift"></i>${esc(`${g.who}: ${g.text}`)}</em>`).join('')}
     </div>`;
@@ -4345,6 +4356,13 @@ function bindBlock(block) {
                 window.toastr?.success?.(L().saved, 'Hearthtide');
                 renderAll();
             }
+        } else if (t.dataset.act === 'ready-push') {
+            const same = state.readyPush?.hid === t.dataset.hid && state.readyPush?.t === t.dataset.t;
+            state.readyPush = same ? null : { hid: t.dataset.hid, t: t.dataset.t };   // повторное нажатие отменяет
+            saveState();
+            injectPrompts();
+            if (state.readyPush) window.toastr?.info?.(L().readyPushToast(capFirst(t.dataset.t)), 'Hearthtide');
+            renderBlock(id);
         } else if (t.dataset.act === 'recall') {
             const fbId = t.dataset.fb;
             state.recall = state.recall === fbId ? null : fbId;   // повторное нажатие отменяет
@@ -4386,6 +4404,10 @@ const PACE_NOTE = {
     auto: 'По сюжету: темп выбирается по романтике пары — до 30 как Slow burn, от 70 как Fast burn, между — обычный (романтика +6 за ответ).',
     slow: 'Slow burn: романтика растёт не больше чем на +3 за ответ, удачное свидание даёт её вдвое меньше; шаги осторожнее, до главной цели на 2 шага и 10 % дольше.',
     fast: 'Fast burn: романтика может расти до +12 за ответ, удачное свидание даёт её в полтора раза больше; шаги смелее, цель на 2 шага и 10 % ближе.',
+};
+const PREP_NOTE = {
+    offscreen: 'За кадром: мир готовится сам, это видно только в инфоблоке («☾» — без героев). В пост подготовка попадает, когда герои сами обратятся к празднику, или по кнопке «в следующий ответ» у пункта.',
+    story: 'В сюжете: как задумано у авторки — модель время от времени показывает подготовку прямо в постах.',
 };
 function setNote(id, text) { const el = document.querySelector(`#${id} span`); if (el) el.textContent = text; }
 
@@ -4447,6 +4469,13 @@ function injectSettingsPanel() {
                     </div>
                     <small class="ht-set-note"><i class="fa-solid fa-hands-praying"></i><span id="ht-faith-now"></span></small>
                     <div class="menu_button ht-set-wide" id="ht-set-rebuild" title="Убрать будущие праздники и подобрать по эпохе и вере этого чата"><i class="fa-solid fa-arrows-rotate"></i> Подобрать праздники заново</div>
+                    <div class="ht-set-row"><span>Подготовка</span>
+                        <select id="ht-set-prep" class="text_pole">
+                            <option value="offscreen" ${prepMode() === 'offscreen' ? 'selected' : ''}>за кадром</option>
+                            <option value="story" ${prepMode() === 'story' ? 'selected' : ''}>в сюжете</option>
+                        </select>
+                    </div>
+                    <small class="ht-set-note ht-set-explain" id="ht-note-prep"><i class="fa-solid fa-circle-info"></i><span>${esc(PREP_NOTE[prepMode()])}</span></small>
                 </section>
                 <section class="ht-set-sec">
                     <div class="ht-set-title"><i class="fa-solid fa-envelope-open-text"></i>Приглашения <small id="ht-names-who"></small></div>
@@ -4639,6 +4668,14 @@ function injectSettingsPanel() {
         });
         document.getElementById('ht-pult-all')?.addEventListener('click', dismissAll);
         syncPult();
+        document.getElementById('ht-set-prep')?.addEventListener('change', e => {
+            localStorage.setItem(LS.prepMode, e.target.value);
+            setNote('ht-note-prep', PREP_NOTE[prepMode()]);
+            // за кадром подсказка к подготовке в пост больше не идёт — уже выпавшую снимаем
+            if (state && prepMode() === 'offscreen' && phaseOf(state).kind !== 'today') { state.beat = null; saveState(); }
+            injectPrompts();
+            renderAll();
+        });
         document.getElementById('ht-set-prev')?.addEventListener('change', e => {
             localStorage.setItem(LS.showPrev, e.target.checked ? 'true' : 'false');
             renderAll();

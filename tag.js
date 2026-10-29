@@ -299,6 +299,27 @@ export function parseEvents(text) {
 }
 
 /** Подсказка основной модели на следующий ответ (от отдельного запроса); «none» — ничего */
+/**
+ * Подготовка за кадром: что мир сделал к празднику сам, без героев — сразу в «Уже сделано», в пост не идёт
+ *   <!-- HT-AWAY
+ *   AWAY | № | КТО | ЧТО СДЕЛАЛИ
+ *   -->
+ */
+export function parseAway(text) {
+    const inner = findBlock(text, 'HT-AWAY');
+    if (inner == null) return [];
+    const out = [];
+    for (const raw of inner.split(/\n+/)) {
+        if (/<[^>]*>/.test(raw)) continue;                            // образец, переписанный как есть
+        const cols = raw.split('|').map(x => x.trim());
+        if ((cols[0] || '').replace(/^[\s\-*•]+/, '').toUpperCase() !== 'AWAY') continue;
+        const m = String(cols[1] || '').match(/^\s*[#№]?(\d{1,2})\b/);
+        const t = tidyValue(stepText(cols[3], 140));
+        if (m && t) out.push({ i: +m[1], who: clean(cols[2], 40), t });
+    }
+    return out.slice(0, 2);
+}
+
 export function parseBeat(text) {
     const inner = findBlock(text, 'HT-BEAT', false);
     return inner == null ? null : clean(inner, 300);
