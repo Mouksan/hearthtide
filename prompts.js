@@ -112,6 +112,11 @@ export function readyNoted(state, h, n = 3) {
     const r = state.ready?.[h.id];
     return [r?.sum, ...(r?.log || []).slice(-n).map(x => (x.who ? `${x.who}: ${x.t}` : x.t))].filter(Boolean);
 }
+/** То же для фона «за кадром»: пункты, сделанные без героев, помечены (off-screen) */
+function offNoted(state, h, n = 3) {
+    const r = state.ready?.[h.id];
+    return [r?.sum, ...(r?.log || []).slice(-n).map(x => `${x.who ? `${x.who}: ` : ''}${x.t}${x.off ? ' (off-screen)' : ''}`)].filter(Boolean);
+}
 /** Подарки, уже известные из истории, — коротко */
 function giftsNoted(ctx, h) {
     const { state, userName, charName } = ctx;
@@ -183,7 +188,7 @@ export function buildStatePrompt(ctx) {
         lines.push(`Also coming: ${hName(x, ctx)} — ${daysWord(x.start - state.today)}, on ${isoOf(x.start)}${x.npc || x.extra ? ' (invitation accepted)' : ''}${noted.length ? `; done so far: ${noted.join('; ')}` : ''}${cg?.text ? `; ${charName}'s gift: ${cg.text}${cg.done ? ' (given)' : ''}` : ''}. Getting ready may show in passing; the day itself hasn't come.`);
     }
     // без помощника: изредка (чем ближе, тем чаще) — пусть подготовка к принятому покажется в мире сама
-    if (ctx.hints !== false && phase.kind !== 'prep' && phase.kind !== 'today' && !state.beat && state.mentionNow && (ctx.tracked || []).length) {
+    if (ctx.hints !== false && !ctx.prepOff && phase.kind !== 'prep' && phase.kind !== 'today' && !state.beat && state.mentionNow && (ctx.tracked || []).length) {
         lines.push('This reply: let one of the coming occasions show once, in passing — someone of this world getting ready for it or speaking of it, a step not taken yet; never force it.');
     }
     // история отменила или перенесла праздник — модель знает, что его больше нет (пара ответов)
@@ -200,7 +205,11 @@ export function buildStatePrompt(ctx) {
         const p = state.prep && state.prep.hid === h.id ? state.prep : null;
         const noted = readyNoted(state, h);
         const bits = [noted.length && `done so far: ${noted.join('; ')}`, p?.mood && `mood: ${p.mood}`].filter(Boolean);
-        if (bits.length) lines.push(`Preparations — ${bits.join(' · ')}. Carry on from there, never redo it.`);
+        if (ctx.prepOff) {
+            // за кадром: подготовка — фон, сама в сцену не входит; пункты, сделанные без героев, помечены
+            const seen = offNoted(state, h);
+            if (seen.length && ctx.hints !== false) lines.push(`Around them, off-screen, the place is getting ready: ${seen.join('; ')}${p?.mood ? ` (mood: ${p.mood})` : ''}. Background only — never bring it into the scene yourself. Use it only when ${charName} or ${userName} turn to the occasion themselves: talk of it, go out among people, ask what is going on. What is marked (off-screen) they haven't seen.`);
+        } else if (bits.length) lines.push(`Preparations — ${bits.join(' · ')}. Carry on from there, never redo it.`);
         if (h.extra) lines.push(`It is a gathering held by ${h.host || 'its hosts'}${h.meaning ? ` (${h.meaning})` : ''}; ${whomOf(ctx, h.whom)} ${h.whom === 'both' ? 'were' : 'was'} invited and ${userName} accepted — the hosts get ready, the invited may get ready too (clothes, a gift, a word).`);
         if (h.npc) {
             const about = npcAbout(ctx, h);
@@ -209,7 +218,7 @@ export function buildStatePrompt(ctx) {
         if (h.birthday && h.who === 'user') {
             lines.push(`People close to ${userName} are secretly preparing a surprise — keep it hidden from ${userName}; hints at most.`);
         }
-        if (!state.beat) lines.push(state.mentionNow && ctx.hints !== false
+        if (!state.beat && !ctx.prepOff) lines.push(state.mentionNow && ctx.hints !== false
             ? 'This reply: let the preparations show once, indirectly — as a consequence of them or a brief encounter with someone involved, never a restatement. Pick an angle not used before; never force it.'
             : 'This reply: keep the preparations in the background.');
     }
@@ -306,13 +315,19 @@ export function buildStatePrompt(ctx) {
         else lines.push(`${userName} joins: ${ev.title}${who}${ev.hook ? ` (it began: ${ev.hook})` : ''}. ${ev.turn >= state.turn - 1 ? 'Carry on from where it began' : 'Let it unfold'} over the next replies; ${userName} still makes every own choice.`);
     }
     // Кто может зайти в этот ответ — по очереди из людей праздника (дёшево, без отдельного запроса)
-    if (ctx.hints !== false && !busy && !state.beat && state.nudge) {
+    if (ctx.hints !== false && !(ctx.prepOff && phase.kind !== 'today') && !busy && !state.beat && state.nudge) {
         lines.push(state.nudge.name
             ? `If the scene allows, ${state.nudge.name} can come into this reply, acting on what they want (${state.nudge.now})${phase.kind === 'today' ? ` or drawing ${userName} into what the day holds now` : ''} — in person or by word; one person, never a crowd.`
             : `If the scene allows, someone the occasion involves — kin or those its custom calls for — can come into this reply; one person, never a crowd.`);
     }
     // Что праздник может принести в этот ответ — придумал отдельный запрос по истории
-    if (ctx.hints !== false && !busy && state.beat) lines.push(`This reply, if the scene allows (it comes first; skip it if it doesn't fit): ${state.beat}`);
+    // пункт «Уже сделано», который игрок попросил вплести (кнопка в инфоблоке) — один раз
+    const rp = state.readyPush;
+    if (rp?.t) {
+        const it = (state.ready?.[rp.hid]?.log || []).find(x => x.t === rp.t);
+        lines.push(`This reply, when the scene allows: let this come into it once, in passing — ${it?.who ? `${it.who}: ` : ''}${rp.t}${it?.off ? ` (it was done off-screen: ${charName} or ${userName} come across it or hear of it)` : ''}.`);
+    }
+    if (ctx.hints !== false && !(ctx.prepOff && phase.kind !== 'today') && !busy && state.beat) lines.push(`This reply, if the scene allows (it comes first; skip it if it doesn't fit): ${state.beat}`);
     if (active) {
         lines.push(`If ${userName} is away from people (road, wilds, danger), the feast stays distant. The calendar never overrides the scene: an urgent or dramatic moment always comes first. Never write ${userName}'s thoughts, feelings, words or choices.`);
     }
@@ -784,6 +799,7 @@ export function buildSideMessages(ctx, needs, src) {
     const lang = langOf(ctx);
     const sys = [`You are Hearthtide, the keeper of the holiday calendar for an ongoing roleplay between ${userName} and ${charName}. You do not continue the story. You read it and reply ONLY with the hidden blocks asked for below — no other text. Notes about what happened hold only what the story has shown. Never decide ${userName}'s thoughts, feelings, words or choices.`];
     if (akaLine(ctx)) sys.push(akaLine(ctx));
+    if (needs.has('beat') && ctx.prepOff && phase.kind !== 'today') sys.push('Exception: the HT-AWAY block is the only place where you add something the story has not shown — a small off-screen step of the world getting ready for an occasion.');
     if (src.card) sys.push(`[${charName}]\n${src.card}`);
     if (src.persona) sys.push(`[${userName}]\n${src.persona}`);
     if (src.lore) sys.push(`[World info]\n${src.lore}`);
@@ -851,7 +867,15 @@ ${GOAL_RULE(ctx)}. Only if the latest messages show a date or an outing of ${use
         task.push(`<!-- HT-NEW CAUSE | YYYY-MM-DD | DAYS | NAME | MEANING | TYPE | PREP | HOST | AGREED -->
 Only a festive occasion the story has set up that isn't in the calendar: a celebration of someone's life event, an announced party, feast or festive gathering, a leisure trip or outing agreed on for a set day — or one the card or lore dates within a month. A party, get-together or celebration at someone's place or out with friends, kin or colleagues for a set day counts, even if nobody has answered yet. Not business, work or plot meetings, talks, deals, errands, fights or casual drop-ins with no occasion: those are the story. Not a date of the two of them alone. CAUSE: what happened, a few words. NAME: what the occasion is (never just a person's name). Date: the day it takes place, counted from today; if it is already happening in the latest messages — today. TYPE: family | personal | religious | folk | memorial | gathering. HOST: who personally invited ${userName} or ${charName} to it in the story, empty if nobody did or they hold it themselves. AGREED: yes only if ${userName}'s own message already said yes to it or proposed it, or they are already there; no if ${userName} hasn't answered yet. At most two lines; leave the block out if there is none.${known.length ? ` Already known: ${known.join(', ')}.` : ''}${no.length ? ` Turned down by the player this year — never offer again, under any name: ${no.join('; ')}.` : ''}`);
     }
-    if (needs.has('beat') && (h || (ctx.tracked || []).length)) {
+    if (needs.has('beat') && ctx.prepOff && phase.kind !== 'today' && (ctx.tracked || []).length) {
+        // за кадром: мир делает шаг подготовки сам, без героев — это ляжет в «Уже сделано», в пост не идёт
+        task.push(`<!-- HT-AWAY
+AWAY | <№> | <who> | <what they did to get ready>
+-->
+Occasions:
+${readyList(ctx)}
+Fill in the line; never copy the <…> placeholders. One step that people of this place take on their own, off-screen, to get ready for one of the occasions above (its number from the list): WHO — a group or a person of this world (not ${userName}, not ${charName}); WHAT — 2–6 words, past tense, true to the era, the place and its customs (${ctx.eraMode === 'modern' ? 'present-day life' : 'their own customs and means'}). It happens away from ${userName} and ${charName} and never involves them. Never repeat what is already noted; the nearer the day, the more visible the step. Vary the kind${state.beatLog?.length ? ` (earlier ideas: ${state.beatLog.join(' / ')})` : ''}. Leave the block out if the occasion is still far off or nothing new would happen yet. In ${lang}.`);
+    } else if (needs.has('beat') && (h || (ctx.tracked || []).length)) {
         // что дать миру сделать в следующем ответе: шаг подготовки, которого ещё не было, — живыми людьми, вскользь;
         // в сам день — то, что день несёт сейчас. Потом помощник запишет это из истории в журнал (HT-READY)
         const tr = (ctx.tracked || []).map(x => `${hName(x, ctx)} (${daysWord(x.start - state.today)})`);

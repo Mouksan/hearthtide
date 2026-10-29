@@ -1123,3 +1123,10 @@ dialog.ht-modal:not([open]) { display: none; }
 .ht-pult-row > span { flex: 1; min-width: 0; overflow-wrap: anywhere; }
 .ht-pult-row .ht-pult-x { margin: 0; flex: none; }
 #ht-pult-all.disabled { opacity: 0.5; pointer-events: none; }
+
+/* ═══ Подготовка за кадром: «☾» у пункта и кнопка «в следующий ответ» ═══ */
+.ht-ready li.ht-ready-off > i { opacity: 0.75; }
+:is(.ht-ib) .ht-ready-push { margin-left: auto; flex: none; padding: 0 5px; border-radius: 5px; color: var(--ht-mute); opacity: 0.55; font-size: 0.85em; }
+:is(.ht-ib) .ht-ready-push + .ht-ready-del { margin-left: 0; }
+:is(.ht-ib) .ht-ready-push:hover, :is(.ht-ib) .ht-ready-push:focus-visible { opacity: 1; color: var(--ht-fg); background: var(--ht-soft-2); }
+:is(.ht-ib) .ht-ready-push.ht-on { opacity: 1; color: var(--ht-acc); }
